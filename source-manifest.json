@@ -8,7 +8,7 @@
   ],
   "sha256": {
     "sources/action-sync/go.mod": "e9cb83ddb37f1eca81b30c9d9e04afd6a2c1968657510712c7b35883ba49948f",
-    "sources/action-sync/main.go": "312d3bac2bd385f6541cdc492ce985bd619b776b4d24602962bae8a9be4df747",
+    "sources/action-sync/main.go": "1aa43e9328c6f33b1322495b288648cba0e53c2eecedf0fcc01dab2b63eca82c",
     "sources/sync-baseline.yml": "9d781328481a792b8dd610d8d2ab8fd7233063d4da24b9b23a0bf34d8c214be1",
     "sources/verify-group-version.yml": "4b1d15cc1923b2982150f0ecaa526788cc1670a25af317a411f28790f0219153",
     "lab/coordinator.py": "b20355b8b7c3bea47d5d248aa68ddc0ad69cd9a3941c2de83eab19b45879ed53"

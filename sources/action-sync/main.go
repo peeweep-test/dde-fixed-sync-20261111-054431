@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -13,11 +14,14 @@ import (
 	"strings"
 )
 
+const pullRequestBranchPrefix = "automation/templates-sync/"
+
 type Config struct {
 	Src        string   `json:"src"`
 	Dest       string   `json:"dest"`
 	DeleteList []string `json:"deletelist"`
 	Branches   []string `json:"branches"`
+	Branch     []string `json:"branch"`
 }
 type Branch struct {
 	Owner  string
@@ -28,10 +32,11 @@ type Branch struct {
 
 func main() {
 	var files, message string
-	var dryRun bool
+	var dryRun, pullRequest bool
 	flag.StringVar(&message, "message", "chore: Sync by .github", "commit message")
 	flag.StringVar(&files, "files", "", "config files, separated by spaces")
 	flag.BoolVar(&dryRun, "dryRun", false, "dry run")
+	flag.BoolVar(&pullRequest, "pull-request", false, "publish template updates through pull requests")
 	flag.Parse()
 
 	if files == "" {
@@ -63,6 +68,9 @@ func main() {
 		changedBranches := make(map[string]map[string]bool)
 
 		for _, config := range configs {
+			if len(config.Branches) == 0 {
+				config.Branches = config.Branch
+			}
 			owner, repo, path, err := split(config.Dest)
 			if err != nil {
 				log.Fatal(err)
@@ -91,6 +99,9 @@ func main() {
 					continue
 				}
 				branch := strings.TrimPrefix(line, "origin/")
+				if strings.HasPrefix(branch, pullRequestBranchPrefix) {
+					continue
+				}
 				branches = append(branches, branch)
 			}
 			var syncBranches []string
@@ -117,7 +128,7 @@ func main() {
 				out, err = execCommand(ctx, workdir, "git", "checkout", branch)
 				if err != nil {
 					logError("err: %v output: %s", err, string(out))
-					continue
+					os.Exit(1)
 				}
 				// 删除文件， 如果有delete_list配置，就不再进行同步
 				if len(config.DeleteList) > 0 {
@@ -167,9 +178,15 @@ func main() {
 		// 提交所有变动的仓库分支
 		for workdir := range changedBranches {
 			for branch := range changedBranches[workdir] {
-				out, err := execCommand(ctx, workdir, "git", "push", "origin", branch)
+				var err error
+				if pullRequest {
+					err = syncPullRequest(ctx, workdir, branch, message)
+				} else {
+					_, err = execCommand(ctx, workdir, "git", "push", "origin", branch)
+				}
 				if err != nil {
-					logError("err: %v output: %s", err, string(out))
+					logError("err: %v", err)
+					os.Exit(1)
 				}
 			}
 		}
@@ -179,6 +196,36 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+}
+
+func syncPullRequest(ctx context.Context, workdir, base, message string) error {
+	repo := filepath.Base(filepath.Dir(workdir)) + "/" + filepath.Base(workdir)
+	branch := pullRequestBranchPrefix + base
+	url, err := execCommand(ctx, workdir, "gh", "pr", "list", "--repo", repo,
+		"--head", branch, "--base", base, "--state", "open", "--json", "url,isCrossRepository",
+		"--jq", "map(select(.isCrossRepository == false))[0].url // empty")
+	if err != nil {
+		return err
+	}
+	previous, err := execCommand(ctx, workdir, "git", "rev-parse", "--verify", "-q", "refs/remotes/origin/"+branch)
+	var exitError *exec.ExitError
+	if err != nil && (!errors.As(err, &exitError) || exitError.ExitCode() != 1) {
+		return err
+	}
+	// Only the tool-owned PR branch may be replaced, using the clone's expected head.
+	lease := "--force-with-lease=refs/heads/" + branch + ":" + strings.TrimSpace(string(previous))
+	if _, err := execCommand(ctx, workdir, "git", "push", lease, "origin", base+":refs/heads/"+branch); err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(url))) == 0 {
+		url, err = execCommand(ctx, workdir, "gh", "pr", "create", "--repo", repo,
+			"--head", branch, "--base", base, "--title", "chore: sync workflow templates", "--body", message)
+		if err != nil {
+			return err
+		}
+	}
+	log.Printf("Pull request: %s", strings.TrimSpace(string(url)))
+	return nil
 }
 
 func logError(format string, args ...interface{}) {
